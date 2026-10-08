@@ -1,0 +1,122 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+# Hosted cluster routes live under a per-cluster subdomain, so the default
+# ingress controller must accept wildcard route admission.
+- name: Allow wildcard routes on the default ingress controller
+  kubernetes.core.k8s_json_patch:
+    kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
+    api_key: "{{ cifmw_openshift_token | default(omit) }}"
+    context: "{{ cifmw_openshift_context | default(omit) }}"
+    api_version: operator.openshift.io/v1
+    kind: IngressController
+    name: default
+    namespace: openshift-ingress-operator
+    patch:
+      - op: add
+        path: /spec/routeAdmission
+        value:
+          wildcardPolicy: WildcardsAllowed
+
+# HyperShift reconciles the HostedCluster's control plane into this
+# namespace; it must pre-exist so the NetworkAttachmentDefinitions below,
+# and the `--additional-network` references in cluster.yml, resolve.
+- name: Create the hosted cluster control plane namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
+    api_key: "{{ cifmw_openshift_token | default(omit) }}"
+    context: "{{ cifmw_openshift_context | default(omit) }}"
+    state: present
+    kind: Namespace
+    name: "{{ cifmw_hosted_cluster_hosted_namespace }}"
+
+- name: Load Networking Environment Definition
+  ansible.builtin.import_role:
+    name: networking_mapper
+    tasks_from: load_env_definition.yml
+
+# The hosted worker VMs need raw L2 access to the isolated networks, not a
+# routable pod IP on them (that is what ci_multus's NADs are for, and
+# worker_network.yml would then have nothing to discover facts against).
+# One macvlan NAD trunks the management node's ctlplane interface -- which
+# already carries internalapi/storage/tenant as VLANs, per the ocp_workers/
+# computes group-templates -- straight into the VM; the guest's own nmstate
+# config (applied generically once retarget.yml repoints the kubeconfig)
+# creates the VLAN sub-interfaces inside it, exactly like any other
+# provisioned node.
+- name: Create hosted worker trunk NetworkAttachmentDefinition
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
+    api_key: "{{ cifmw_openshift_token | default(omit) }}"
+    context: "{{ cifmw_openshift_context | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: "{{ cifmw_hosted_cluster_trunk_nad_name }}"
+        namespace: "{{ cifmw_hosted_cluster_hosted_namespace }}"
+      spec:
+        config: >-
+          {{
+            {
+              'cniVersion': '0.3.1',
+              'name': cifmw_hosted_cluster_trunk_nad_name,
+              'type': 'macvlan',
+              'master':
+                cifmw_hosted_cluster_management_interface | default(
+                  cifmw_networking_env_definition.instances[cifmw_hosted_cluster_ocp_hostname]
+                    .networks.ctlplane.interface_name, true),
+              'ipam': {},
+            } | to_json
+          }}
+
+- name: Create MetalLB IPAddressPool for the hosted cluster KubeAPI
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
+    api_key: "{{ cifmw_openshift_token | default(omit) }}"
+    context: "{{ cifmw_openshift_context | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: metallb.io/v1beta1
+      kind: IPAddressPool
+      metadata:
+        name: "{{ cifmw_hosted_cluster_name }}-kubeapi"
+        namespace: "{{ cifmw_hosted_cluster_metallb_namespace }}"
+      spec:
+        addresses: "{{ cifmw_hosted_cluster_kubeapi_address_pool }}"
+        # This pool is dedicated to a single hosted cluster's KubeAPI
+        # Service, so auto-assignment cannot collide with another cluster.
+        autoAssign: true
+        avoidBuggyIPs: false
+
+- name: Create MetalLB L2Advertisement for the hosted cluster KubeAPI
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
+    api_key: "{{ cifmw_openshift_token | default(omit) }}"
+    context: "{{ cifmw_openshift_context | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: metallb.io/v1beta1
+      kind: L2Advertisement
+      metadata:
+        name: "{{ cifmw_hosted_cluster_name }}-kubeapi"
+        namespace: "{{ cifmw_hosted_cluster_metallb_namespace }}"
+      spec:
+        ipAddressPools:
+          - "{{ cifmw_hosted_cluster_name }}-kubeapi"
+        interfaces:
+          - "{{ cifmw_hosted_cluster_kubeapi_interface }}"
