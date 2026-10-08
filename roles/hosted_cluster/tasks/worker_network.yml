@@ -1,0 +1,196 @@
+---
+# Copyright Red Hat, Inc.
+# All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may
+# not use this file except in compliance with the License. You may obtain
+# a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+# cifmw_networking_env_definition only ever resolves a real interface_name
+# from a known MAC address matched against live-gathered facts (see
+# NetworkingInstanceMapper in plugins/module_utils/net_map/networking_mapper.py);
+# there is no declarative "this network is eth1" shortcut. So, same as any
+# other provisioned node, each hosted worker VM needs: a known MAC for its
+# trunk interface (read from its VirtualMachineInstance, since HyperShift/
+# KubeVirt -- not ci-framework -- assigns it), SSH reachability for fact
+# gathering, and a networking_mapper group-template describing the trunk
+# (ctlplane untagged, internalapi/storage/tenant as VLANs on top of it --
+# the same shape as the ocp_workers/computes group-templates).
+- name: Load Networking Definition if not already available
+  when: cifmw_networking_definition is not defined
+  ansible.builtin.include_vars:
+    file: "{{ cifmw_networking_mapper_networking_def_path }}"
+    name: cifmw_networking_definition
+
+- name: Gather hosted worker nodes
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cifmw_hosted_cluster_artifacts_dir }}/kubeconfig-{{ cifmw_hosted_cluster_name }}"
+    kind: Node
+  register: _hosted_cluster_worker_nodes_info
+
+- name: Gather hosted worker VirtualMachineInstances
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
+    api_key: "{{ cifmw_openshift_token | default(omit) }}"
+    context: "{{ cifmw_openshift_context | default(omit) }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachineInstance
+    namespace: "{{ cifmw_hosted_cluster_hosted_namespace }}"
+  register: _hosted_cluster_worker_vmis
+
+- name: Resolve each hosted worker node's trunk interface MAC
+  vars:
+    _vmi: >-
+      {{
+        _hosted_cluster_worker_vmis.resources |
+        selectattr('metadata.name', 'equalto', item.metadata.name) | first
+      }}
+    _trunk_iface: >-
+      {{
+        _vmi.status.interfaces | default([]) |
+        rejectattr('name', 'equalto', 'default') | first | default({})
+      }}
+  ansible.builtin.set_fact:
+    _hosted_cluster_worker_trunk_macs: >-
+      {{
+        _hosted_cluster_worker_trunk_macs | default({}) |
+        combine({item.metadata.name: _trunk_iface.mac | default('')})
+      }}
+  loop: "{{ _hosted_cluster_worker_nodes_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Require a resolved trunk MAC for every hosted worker node
+  ansible.builtin.assert:
+    that:
+      - _hosted_cluster_worker_trunk_macs[item.metadata.name] | length > 0
+    fail_msg: >-
+      Could not find a VirtualMachineInstance with a non-default network
+      interface for hosted worker node {{ item.metadata.name }}; check that
+      the {{ cifmw_hosted_cluster_trunk_nad_name }} NetworkAttachmentDefinition
+      was attached as a --additional-network in cluster.yml.
+  loop: "{{ _hosted_cluster_worker_nodes_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Add hosted worker nodes to the runtime inventory
+  vars:
+    _node_address: >-
+      {{
+        item.status.addresses |
+        selectattr('type', 'equalto', 'InternalIP') |
+        map(attribute='address') | first
+      }}
+  ansible.builtin.add_host:
+    name: "{{ item.metadata.name }}"
+    groups:
+      - "{{ cifmw_hosted_cluster_worker_group }}"
+    ansible_host: "{{ _node_address }}"
+    ansible_user: "{{ cifmw_hosted_cluster_ssh_user }}"
+    ansible_ssh_private_key_file: "{{ cifmw_hosted_cluster_ssh_private_key }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+  loop: "{{ _hosted_cluster_worker_nodes_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Wait for SSH on hosted worker nodes
+  ansible.builtin.wait_for_connection:
+    timeout: 300
+  delegate_to: "{{ item.metadata.name }}"
+  loop: "{{ _hosted_cluster_worker_nodes_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Gather hosted worker node networking facts
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+  delegate_to: "{{ item.metadata.name }}"
+  delegate_facts: true
+  loop: "{{ _hosted_cluster_worker_nodes_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Build hosted worker interfaces info
+  ansible.builtin.set_fact:
+    _hosted_cluster_worker_ifaces_info: >-
+      {{
+        _hosted_cluster_worker_ifaces_info | default({}) |
+        combine({
+          item.metadata.name: [{
+            'mac': _hosted_cluster_worker_trunk_macs[item.metadata.name],
+            'network': 'ctlplane',
+          }]
+        })
+      }}
+  loop: "{{ _hosted_cluster_worker_nodes_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Resolve hosted worker networking via a scoped networking_mapper run
+  vars:
+    _hosted_worker_networking_definition:
+      networks: >-
+        {{
+          cifmw_networking_definition.networks |
+          dict2items |
+          selectattr('key', 'in', cifmw_hosted_cluster_networks) |
+          items2dict
+        }}
+      group-templates:
+        "{{ cifmw_hosted_cluster_worker_group }}":
+          network-template:
+            range:
+              start: "{{ cifmw_hosted_cluster_worker_net_range_start }}"
+              length: "{{ cifmw_hosted_cluster_worker_net_range_length }}"
+          networks:
+            ctlplane: {}
+            internalapi:
+              trunk-parent: ctlplane
+            storage:
+              trunk-parent: ctlplane
+            tenant:
+              trunk-parent: ctlplane
+  cifmw.general.ci_net_map:
+    networking_definition: "{{ _hosted_worker_networking_definition }}"
+    interfaces_info: "{{ _hosted_cluster_worker_ifaces_info }}"
+  register: _hosted_cluster_worker_net_map
+
+- name: Merge hosted worker networking into the global environment definition
+  ansible.builtin.set_fact:
+    cifmw_networking_env_definition: >-
+      {{
+        cifmw_networking_env_definition |
+        combine({
+          'instances': cifmw_networking_env_definition.instances |
+            combine(_hosted_cluster_worker_net_map.networking_env_definition.instances)
+        }, recursive=true)
+      }}
+    cacheable: true
+
+- name: Persist the updated Networking Environment Definition
+  ansible.builtin.copy:
+    dest: "{{ cifmw_networking_mapper_networking_env_def_path }}"
+    content: "{{ cifmw_networking_env_definition | to_nice_yaml }}"
+    mode: "0644"
+
+- name: Require resolved networking for hosted worker nodes
+  ansible.builtin.assert:
+    that:
+      - >-
+        cifmw_networking_env_definition.instances[item.metadata.name]
+        .networks.ctlplane.interface_name is defined
+    fail_msg: >-
+      networking_mapper did not resolve a ctlplane interface for hosted
+      worker node {{ item.metadata.name }}.
+  loop: "{{ _hosted_cluster_worker_nodes_info.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
