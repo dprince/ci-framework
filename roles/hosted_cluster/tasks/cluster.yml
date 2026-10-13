@@ -113,28 +113,39 @@
     cifmw_hosted_cluster_resolved_release_image: "{{ cifmw_hosted_cluster_release_image }}"
 
 - name: Render KubeVirt hosted cluster with hcp
+  vars:
+    # One additional-network per isolated network NAD created in
+    # management_network.yml (ctlplane/internalapi/storage/tenant).
+    _hosted_cluster_additional_networks: >-
+      {{
+        cifmw_hosted_cluster_networks |
+        map('regex_replace', '^(.*)$',
+            '--additional-network=name:' ~ cifmw_hosted_cluster_hosted_namespace ~ '/\1') |
+        list
+      }}
   environment:
     KUBECONFIG: "{{ cifmw_openshift_kubeconfig }}"
   ansible.builtin.command:
-    argv:
-      - "{{ cifmw_hosted_cluster_artifacts_dir }}/hcp"
-      - create
-      - cluster
-      - kubevirt
-      - "--name={{ cifmw_hosted_cluster_name }}"
-      - "--namespace={{ cifmw_hosted_cluster_namespace }}"
-      - "--node-pool-replicas={{ cifmw_hosted_cluster_worker_count }}"
-      - "--memory={{ cifmw_hosted_cluster_worker_memory }}"
-      - "--cores={{ cifmw_hosted_cluster_worker_cores }}"
-      - "--root-volume-size={{ cifmw_hosted_cluster_root_volume_size }}"
-      - "--root-volume-storage-class={{ cifmw_hosted_cluster_resolved_root_volume_storage_class }}"
-      - "--etcd-storage-class={{ cifmw_hosted_cluster_resolved_etcd_storage_class }}"
-      - "--pull-secret={{ cifmw_hosted_cluster_artifacts_dir }}/pull-secret.json"
-      - "--ssh-key={{ cifmw_hosted_cluster_ssh_public_key }}"
-      - "--release-image={{ cifmw_hosted_cluster_resolved_release_image }}"
-      - "--additional-network=name:{{ cifmw_hosted_cluster_hosted_namespace }}/{{ cifmw_hosted_cluster_trunk_nad_name }}"
-      - "--render"
-      - "--render-sensitive"
+    argv: >-
+      {{
+        [
+          cifmw_hosted_cluster_artifacts_dir ~ '/hcp',
+          'create',
+          'cluster',
+          'kubevirt',
+          '--name=' ~ cifmw_hosted_cluster_name,
+          '--namespace=' ~ cifmw_hosted_cluster_namespace,
+          '--node-pool-replicas=' ~ cifmw_hosted_cluster_worker_count,
+          '--memory=' ~ cifmw_hosted_cluster_worker_memory,
+          '--cores=' ~ cifmw_hosted_cluster_worker_cores,
+          '--root-volume-size=' ~ cifmw_hosted_cluster_root_volume_size,
+          '--root-volume-storage-class=' ~ cifmw_hosted_cluster_resolved_root_volume_storage_class,
+          '--etcd-storage-class=' ~ cifmw_hosted_cluster_resolved_etcd_storage_class,
+          '--pull-secret=' ~ cifmw_hosted_cluster_artifacts_dir ~ '/pull-secret.json',
+          '--ssh-key=' ~ cifmw_hosted_cluster_ssh_public_key,
+          '--release-image=' ~ cifmw_hosted_cluster_resolved_release_image,
+        ] + _hosted_cluster_additional_networks + ['--render', '--render-sensitive']
+      }}
   register: _hosted_cluster_rendered
   changed_when: false
   no_log: true

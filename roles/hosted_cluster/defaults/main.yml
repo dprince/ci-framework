@@ -27,30 +27,24 @@ cifmw_hosted_cluster_networks:
   - storage
   - tenant
 
-# Real inventory hostname of a management cluster node, used to read the
-# physical ctlplane interface name to trunk into the hosted worker VMs.
-# Mirrors ci_multus's own cifmw_ci_multus_ocp_hostname (same "crc" default,
-# same caveat: override to a real cifmw_networking_env_definition instance
-# for multi-node management clusters). Ignored when
-# cifmw_hosted_cluster_management_interface is set.
-cifmw_hosted_cluster_ocp_hostname: "crc"
-
-# Direct override for the management cluster's ctlplane interface name,
-# bypassing the cifmw_networking_env_definition.instances lookup above
-# entirely. CRC and cifmw-provisioned management-cluster nodes get their
-# NICs renamed to a predictable ethN scheme that networking_mapper can
-# resolve by instance name, but a management cluster installed by an
-# external tool (e.g. dev-scripts) keeps whatever names the OS assigned
-# (enp5s0, ...) and has no corresponding
-# cifmw_networking_env_definition.instances entry to look one up from. Set
-# this to the real interface name in that case.
+# Physical NIC on each management cluster node (selected by
+# cifmw_hosted_cluster_management_node_selector) used as the base for the
+# hosted worker VMs' isolated networks: a NodeNetworkConfigurationPolicy
+# bridges it untagged for ctlplane and VLAN-tags it (per network, 1-per-NAD)
+# for internalapi/storage/tenant, mirroring the upstream documented
+# architecture (NNCP-created Linux bridges + per-network Multus NADs with
+# whereabouts IPAM) rather than cifmw's own ethN/networking_mapper node
+# provisioning -- a management cluster installed by an external tool (e.g.
+# dev-scripts) has no cifmw_networking_env_definition.instances entry to
+# resolve an interface name from. Required; there is no discovery fallback.
 cifmw_hosted_cluster_management_interface: ""
 
-# Name of the NetworkAttachmentDefinition that trunks the management
-# cluster's ctlplane interface (carrying ctlplane untagged plus
-# internalapi/storage/tenant as VLANs, same shape as the ocp_workers/
-# computes group-templates) into each hosted worker VM.
-cifmw_hosted_cluster_trunk_nad_name: "hosted-trunk"
+# Selects which management cluster nodes the isolated-network
+# NodeNetworkConfigurationPolicy applies to. Defaults to all control-plane
+# nodes, since dev-scripts/compact management clusters run KubeVirt
+# workloads there too.
+cifmw_hosted_cluster_management_node_selector:
+  node-role.kubernetes.io/master: ""
 
 # group-templates entry name and dedicated networking_mapper IP range for
 # the hosted cluster's own worker nodes. Kept outside the ranges used by
@@ -106,6 +100,7 @@ cifmw_hosted_cluster_release_image: ""
 cifmw_hosted_cluster_cnv_channel: stable
 cifmw_hosted_cluster_mce_channel: stable-2.17
 cifmw_hosted_cluster_metallb_channel: stable
+cifmw_hosted_cluster_nmstate_channel: stable
 
 # MetalLB address pool for the hosted cluster's KubeAPI. Required (a list of
 # addresses/ranges, e.g. ["192.168.100.50-192.168.100.60"]) unless rendering
@@ -245,3 +240,40 @@ cifmw_hosted_cluster_metallb_operator_cr:
   metadata:
     name: metallb
     namespace: "{{ cifmw_hosted_cluster_metallb_namespace }}"
+
+# NMState on the management cluster. Provisions the NodeNetworkConfigurationPolicy
+# that bridges cifmw_hosted_cluster_management_interface into per-network Linux
+# bridges (ctlplane/internalapi/storage/tenant), which the Multus NADs created in
+# management_network.yml then expose to the hosted worker VMs with whereabouts
+# IPAM -- see roles/hosted_cluster/README.md for the full architecture.
+cifmw_hosted_cluster_nmstate_namespace: openshift-nmstate
+
+# The NMState Operator's CSV only supports the AllNamespaces install mode,
+# like metallb-operator above.
+cifmw_hosted_cluster_nmstate_olm_operator_group:
+  apiVersion: operators.coreos.com/v1
+  kind: OperatorGroup
+  metadata:
+    name: "{{ cifmw_hosted_cluster_nmstate_namespace }}"
+    namespace: "{{ cifmw_hosted_cluster_nmstate_namespace }}"
+  spec: {}
+
+cifmw_hosted_cluster_nmstate_olm_subscription:
+  apiVersion: operators.coreos.com/v1alpha1
+  kind: Subscription
+  metadata:
+    name: kubernetes-nmstate-operator
+    namespace: "{{ cifmw_hosted_cluster_nmstate_namespace }}"
+  spec:
+    channel: "{{ cifmw_hosted_cluster_nmstate_channel }}"
+    installPlanApproval: Automatic
+    name: kubernetes-nmstate-operator
+    source: redhat-operators
+    sourceNamespace: openshift-marketplace
+
+# Singleton CR that makes the operator deploy the nmstate-handler DaemonSet.
+cifmw_hosted_cluster_nmstate_cr:
+  apiVersion: nmstate.io/v1
+  kind: NMState
+  metadata:
+    name: nmstate

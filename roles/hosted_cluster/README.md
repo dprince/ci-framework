@@ -61,15 +61,14 @@ is combined with matters:
 * `cifmw_networking_env_definition.networks.<name>.tools.metallb` must be
   populated for each network in `cifmw_hosted_cluster_networks` -- this is
   the standard `networking_mapper` output used across ci-framework.
-* `cifmw_hosted_cluster_ocp_hostname` must name a real
-  `cifmw_networking_env_definition.instances` entry on the management
-  cluster -- the default `crc` only matches single-node CRC-style layouts.
-  Set it explicitly for multi-node management clusters, same caveat as
-  `ci_multus`'s own `cifmw_ci_multus_ocp_hostname`. If the management
-  cluster was installed by something other than ci-framework (e.g.
-  dev-scripts) it has no matching `instances` entry at all -- set
-  `cifmw_hosted_cluster_management_interface` to the real NIC name instead
-  (e.g. `enp6s0`), which bypasses this lookup entirely.
+* `cifmw_hosted_cluster_management_interface` must name a real, otherwise
+  unused NIC on the management cluster nodes selected by
+  `cifmw_hosted_cluster_management_node_selector` (e.g. `enp6s0`) -- a
+  `NodeNetworkConfigurationPolicy` bridges it for the hosted worker VMs'
+  isolated networks. Required; there is no
+  `cifmw_networking_env_definition.instances`-based discovery, since a
+  management cluster installed by something other than ci-framework (e.g.
+  dev-scripts) has no matching `instances` entry to resolve one from.
 * The automation SSH keypair at `cifmw_hosted_cluster_ssh_private_key` /
   `_ssh_public_key` (`~/.ssh/id_cifw` by default -- the keypair
   `deploy_architecture.yml` already injects into provisioned nodes, since
@@ -88,43 +87,52 @@ is combined with matters:
 
 1. Installs OpenShift Virtualization, the multicluster engine (MCE, with the
    `hypershift` and `hypershift-local-hosting` components -- not
-   `central-infrastructure-management`, which is Agent-provider-only) and
-   MetalLB on the management cluster.
+   `central-infrastructure-management`, which is Agent-provider-only),
+   MetalLB and the NMState Operator on the management cluster.
 2. Allows wildcard routes on the management cluster's default ingress
    controller, creates the hosted cluster's control plane namespace, and
    exposes the hosted cluster's KubeAPI through a dedicated MetalLB address
-   pool. A single macvlan `NetworkAttachmentDefinition` (no IPAM -- the
-   guest, not the virt-launcher pod, owns the address) trunks the management
-   node's ctlplane interface -- which already carries internalapi/storage/
-   tenant as VLANs, per the `ocp_workers`/`computes` group-templates -- so it
-   can be passed into each worker VM.
+   pool. Mirroring the upstream documented architecture for this feature, a
+   `NodeNetworkConfigurationPolicy` bridges
+   `cifmw_hosted_cluster_management_interface` on the management nodes --
+   untagged for ctlplane, VLAN-tagged (per `cifmw_networking_definition`) for
+   internalapi/storage/tenant -- into one Linux bridge per network, and
+   `ci_multus` exposes each bridge as its own `NetworkAttachmentDefinition`
+   with `whereabouts` IPAM. KubeVirt assigns and configures each worker VM's
+   interface automatically at boot from these NADs; no in-guest nmstate/VLAN
+   configuration happens or is possible, since HyperShift -- not ci-framework
+   -- generates the worker VMs' ignition.
 3. Creates the hosted cluster with `hcp create cluster kubevirt`, attaching
-   that trunk NAD via `--additional-network` and the automation SSH key via
-   `--ssh-key`, waits for it to become available, saves its kubeconfig, and
-   waits for its KubeVirt worker nodes to become `Ready`.
+   all four isolated-network NADs via `--additional-network` and the
+   automation SSH key via `--ssh-key`, waits for it to become available,
+   saves its kubeconfig, and waits for its KubeVirt worker nodes to become
+   `Ready`.
 4. Enables global IP forwarding on the hosted cluster's network, the one
    setting genuinely specific to a KubeVirt hosted control plane that the
    generic RHOSO flow does not configure.
-5. Discovers each hosted worker's real trunk interface name: reads the
-   deterministic MAC HyperShift/KubeVirt assigned to the trunk NIC from its
-   `VirtualMachineInstance`, adds the node to the runtime inventory over SSH,
-   gathers its facts, and feeds both into a `cifmw.general.ci_net_map` run
-   scoped to a dedicated `cifmw_hosted_cluster_worker_group` group-template
-   (ctlplane + internalapi/storage/tenant VLANs, like `ocp_workers`, but with
-   its own non-overlapping IP range so it can never collide with the
-   management cluster's own node addressing). The result is merged into the
-   same global `cifmw_networking_env_definition` used everywhere else, so no
-   separate, hosted-specific networking fact exists.
+5. Discovers each hosted worker's real interface names: reads the
+   deterministic MAC and IP HyperShift/KubeVirt/whereabouts assigned to each
+   isolated-network NIC from its `VirtualMachineInstance`, adds the node to
+   the runtime inventory over SSH (via its ctlplane address -- the Node's own
+   `InternalIP` sits on the management cluster's internal pod network and is
+   not reachable from outside it), gathers its facts, and feeds both into a
+   `cifmw.general.ci_net_map` run scoped to a dedicated
+   `cifmw_hosted_cluster_worker_group` group-template (one standalone
+   interface per network, unlike the VLAN-on-trunk `ocp_workers`/`computes`
+   group-templates, with its own non-overlapping IP range so it can never
+   collide with the management cluster's own node addressing). The result is
+   merged into the same global `cifmw_networking_env_definition` used
+   everywhere else, so no separate, hosted-specific networking fact exists.
 6. Retargets `cifmw_openshift_kubeconfig` at the hosted cluster, mirroring
    the override pattern used by the `hive` role, so every later
    `cifmw_setup` phase (`deploy_architecture.yml`, `deploy_edpm.yml`)
    transparently deploys RHOSO onto the hosted cluster instead of the
-   management cluster. This is also why NMState, MetalLB pools/NADs for the
-   isolated networks, storage classes and the OpenStack operator are **not**
-   installed by this role: the existing `deploy_architecture.yml` /
-   `kustomize_deploy` flow already does all of that, generically, against
-   whatever cluster `cifmw_openshift_kubeconfig` points to -- now including
-   the hosted workers' real interface names resolved in step 5.
+   management cluster. This is also why MetalLB pools for the isolated
+   networks, storage classes and the OpenStack operator are **not** installed
+   by this role: the existing `deploy_architecture.yml` / `kustomize_deploy`
+   flow already does all of that, generically, against whatever cluster
+   `cifmw_openshift_kubeconfig` points to -- now including the hosted
+   workers' real interface names resolved in step 5.
 
 `roles/cifmw_setup/tasks/deploy_architecture.yml` additionally scales
 `openstack-baremetal` to zero replicas when `cifmw_deploy_hosted_cluster` is
@@ -140,9 +148,9 @@ the OpenStack init CR it generates.
 | `cifmw_hosted_cluster_namespace` | `clusters` | HostedCluster and kubeconfig namespace. |
 | `cifmw_hosted_cluster_hosted_namespace` | `clusters-<name>` | Control plane namespace HyperShift manages; where service-pod NADs are attached. |
 | `cifmw_hosted_cluster_networks` | `[ctlplane, internalapi, storage, tenant]` | Isolated networks attached to the hosted cluster. |
-| `cifmw_hosted_cluster_ocp_hostname` | `crc` | Real management-cluster `cifmw_networking_env_definition.instances` entry to read the ctlplane interface name from. Override for multi-node management clusters. Ignored when `cifmw_hosted_cluster_management_interface` is set. |
-| `cifmw_hosted_cluster_management_interface` | `""` | Direct override for the management cluster's ctlplane interface name, bypassing `cifmw_hosted_cluster_ocp_hostname`/`cifmw_networking_env_definition` entirely. Required when the management cluster was installed by something other than ci-framework (e.g. dev-scripts), since it then has no matching `instances` entry. |
-| `cifmw_hosted_cluster_trunk_nad_name` | `hosted-trunk` | Name of the trunk `NetworkAttachmentDefinition`/`--additional-network` passed into each worker VM. |
+| `cifmw_hosted_cluster_management_interface` | `""` | **Required.** Physical NIC on the management cluster nodes bridged (via `NodeNetworkConfigurationPolicy`) into one Linux bridge per isolated network -- untagged for ctlplane, VLAN-tagged for internalapi/storage/tenant. No `cifmw_networking_env_definition.instances`-based discovery, since a dev-scripts-installed management cluster has no matching entry. |
+| `cifmw_hosted_cluster_management_node_selector` | `{node-role.kubernetes.io/master: ""}` | Node selector for the isolated-networks `NodeNetworkConfigurationPolicy`. |
+| `cifmw_hosted_cluster_nmstate_channel` | `stable` | NMState Operator subscription channel. |
 | `cifmw_hosted_cluster_worker_group` | `hosted_cluster_workers` | networking_mapper group-template / inventory group name for the hosted worker nodes. |
 | `cifmw_hosted_cluster_worker_net_range_start` / `_length` | `200` / `10` | IP range reserved for hosted workers within each isolated network, kept clear of the `ocps`/`ocp_workers`/`computes` ranges. |
 | `cifmw_hosted_cluster_ssh_user` | `core` | SSH user on the hosted worker VMs. |
