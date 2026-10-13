@@ -14,7 +14,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-- name: Create OpenShift Virtualization, MCE and MetalLB namespaces
+- name: Create OpenShift Virtualization, MCE, MetalLB and NMState namespaces
   kubernetes.core.k8s:
     kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
     api_key: "{{ cifmw_openshift_token | default(omit) }}"
@@ -26,8 +26,9 @@
     - "{{ cifmw_hosted_cluster_cnv_namespace }}"
     - "{{ cifmw_hosted_cluster_mce_namespace }}"
     - "{{ cifmw_hosted_cluster_metallb_namespace }}"
+    - "{{ cifmw_hosted_cluster_nmstate_namespace }}"
 
-- name: Subscribe OpenShift Virtualization, MCE and MetalLB
+- name: Subscribe OpenShift Virtualization, MCE, MetalLB and NMState
   kubernetes.core.k8s:
     kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
     api_key: "{{ cifmw_openshift_token | default(omit) }}"
@@ -41,10 +42,12 @@
     - "{{ cifmw_hosted_cluster_mce_olm_subscription }}"
     - "{{ cifmw_hosted_cluster_metallb_olm_operator_group }}"
     - "{{ cifmw_hosted_cluster_metallb_olm_subscription }}"
+    - "{{ cifmw_hosted_cluster_nmstate_olm_operator_group }}"
+    - "{{ cifmw_hosted_cluster_nmstate_olm_subscription }}"
   loop_control:
     label: "{{ item.metadata.name }}"
 
-- name: Wait for OpenShift Virtualization, MCE and MetalLB operators to install
+- name: Wait for OpenShift Virtualization, MCE, MetalLB and NMState operators to install
   environment:
     KUBECONFIG: "{{ cifmw_openshift_kubeconfig }}"
     PATH: "{{ cifmw_path }}"
@@ -60,6 +63,7 @@
     - {name: kubevirt-hyperconverged, namespace: "{{ cifmw_hosted_cluster_cnv_namespace }}"}
     - {name: multicluster-engine, namespace: "{{ cifmw_hosted_cluster_mce_namespace }}"}
     - {name: metallb-operator, namespace: "{{ cifmw_hosted_cluster_metallb_namespace }}"}
+    - {name: kubernetes-nmstate-operator, namespace: "{{ cifmw_hosted_cluster_nmstate_namespace }}"}
   loop_control:
     label: "{{ item.name }}"
   retries: "{{ cifmw_hosted_cluster_wait_retries }}"
@@ -78,6 +82,7 @@
   loop:
     - "{{ cifmw_hosted_cluster_cnv_hyperconverged }}"
     - "{{ cifmw_hosted_cluster_metallb_operator_cr }}"
+    - "{{ cifmw_hosted_cluster_nmstate_cr }}"
   loop_control:
     label: "{{ item.metadata.name }}"
 
@@ -141,6 +146,25 @@
   retries: "{{ cifmw_hosted_cluster_wait_retries }}"
   delay: "{{ cifmw_hosted_cluster_wait_delay }}"
   until: _hosted_cluster_metallb_speaker is success
+
+- name: Wait for NMState handler pods
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
+    api_key: "{{ cifmw_openshift_token | default(omit) }}"
+    context: "{{ cifmw_openshift_context | default(omit) }}"
+    kind: Pod
+    namespace: "{{ cifmw_hosted_cluster_nmstate_namespace }}"
+    label_selectors:
+      - component = kubernetes-nmstate-handler
+    wait: true
+    wait_condition:
+      type: Ready
+      status: "True"
+    wait_timeout: 300
+  register: _hosted_cluster_nmstate_handler
+  retries: "{{ cifmw_hosted_cluster_wait_retries }}"
+  delay: "{{ cifmw_hosted_cluster_wait_delay }}"
+  until: _hosted_cluster_nmstate_handler is success
 
 - name: Install LVMS for hosted etcd and root volume storage
   when: >-
