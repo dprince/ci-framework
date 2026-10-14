@@ -168,28 +168,43 @@
 # interface (see management_network.yml), not a VLAN layered on top of a
 # single trunk -- so, unlike the ocp_workers/computes group-templates,
 # there is no trunk-parent here.
+#
+# The whole networking_definition must be built as a single Jinja
+# expression (not a YAML mapping with a "{{ cifmw_hosted_cluster_worker_group }}":
+# literal key): Ansible templates dict *values* recursively but does not
+# reliably template a key that is itself a Jinja expression nested this
+# deep, so the group-templates entry silently keyed on the literal string
+# "{{ cifmw_hosted_cluster_worker_group }}" instead of the real group name
+# -- ci_net_map then found no group-template matching the
+# hosted_cluster_workers Ansible inventory group and produced zero
+# instances, with no error.
+- name: Build the scoped networking_mapper definition for hosted workers
+  ansible.builtin.set_fact:
+    _hosted_worker_networking_definition: >-
+      {%- set _def = {
+        'networks': cifmw_networking_definition.networks |
+          dict2items | selectattr('key', 'in', cifmw_hosted_cluster_networks) | items2dict,
+      } -%}
+      {%- set _group_networks = {} -%}
+      {%- for _net in cifmw_hosted_cluster_networks -%}
+        {%- set _ = _group_networks.update({_net: {}}) -%}
+      {%- endfor -%}
+      {%- set _ = _def.update({
+        'group-templates': {
+          cifmw_hosted_cluster_worker_group: {
+            'network-template': {
+              'range': {
+                'start': cifmw_hosted_cluster_worker_net_range_start,
+                'length': cifmw_hosted_cluster_worker_net_range_length,
+              },
+            },
+            'networks': _group_networks,
+          },
+        },
+      }) -%}
+      {{ _def }}
+
 - name: Resolve hosted worker networking via a scoped networking_mapper run
-  vars:
-    _hosted_worker_networking_definition:
-      networks: >-
-        {{
-          cifmw_networking_definition.networks |
-          dict2items |
-          selectattr('key', 'in', cifmw_hosted_cluster_networks) |
-          items2dict
-        }}
-      group-templates:
-        "{{ cifmw_hosted_cluster_worker_group }}":
-          network-template:
-            range:
-              start: "{{ cifmw_hosted_cluster_worker_net_range_start }}"
-              length: "{{ cifmw_hosted_cluster_worker_net_range_length }}"
-          networks: >-
-            {%- set _networks = {} -%}
-            {%- for _net in cifmw_hosted_cluster_networks -%}
-              {%- set _ = _networks.update({_net: {}}) -%}
-            {%- endfor -%}
-            {{ _networks }}
   cifmw.general.ci_net_map:
     networking_definition: "{{ _hosted_worker_networking_definition }}"
     interfaces_info: "{{ _hosted_cluster_worker_ifaces_info }}"
@@ -208,6 +223,7 @@
     cacheable: true
 
 - name: Persist the updated Networking Environment Definition
+  become: true
   ansible.builtin.copy:
     dest: "{{ cifmw_networking_mapper_networking_env_def_path }}"
     content: "{{ cifmw_networking_env_definition | to_nice_yaml }}"
