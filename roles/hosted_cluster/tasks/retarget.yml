@@ -43,12 +43,28 @@
     cifmw_openshift_token: "{{ _hosted_cluster_kubeconfig_dict.users[0].user.get('token') }}"
     cacheable: true
 
+# The hosted cluster's own KubeVirt worker VMs already have a working
+# StorageClass via --infra-storage-class-mapping in cluster.yml -- there
+# is no secondary data disk for a second, real LVMS install to use.
+# Force the generic cifmw_use_lvms step in deploy_architecture.yml off
+# here (now that cifmw_openshift_kubeconfig points at the guest cluster)
+# rather than editing deploy_architecture.yml itself, which every
+# deployment flow shares, not just this one.
+- name: Disable the generic LVMS install against the hosted cluster
+  when: cifmw_hosted_cluster_map_infra_storage_class | bool
+  ansible.builtin.set_fact:
+    cifmw_use_lvms: false
+    cacheable: true
+
 # cifmw_helpers/include_dir.yml and the `include_vars: dir=...` calls in
 # deploy_edpm.yml load artifacts/parameters/*.yml sorted by filename, last
 # file wins. This filename sorts after openshift-login-params.yml, so it
 # overrides the management cluster credentials written there for any phase
-# re-loaded from a separate ansible-playbook invocation.
-- name: Persist the hosted cluster kubeconfig override
+# re-loaded from a separate ansible-playbook invocation. It also disables
+# cifmw_use_lvms the same way, so a later, separate ansible-playbook
+# invocation does not re-enable the doomed guest-cluster LVMS install from
+# a stale global default/extra-var.
+- name: Persist the hosted cluster kubeconfig and LVMS overrides
   vars:
     _hosted_cluster_params_content: |
       cifmw_openshift_kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
@@ -57,6 +73,9 @@
       cifmw_openshift_user: "{{ cifmw_openshift_user }}"
       {% if cifmw_openshift_token %}
       cifmw_openshift_token: "{{ cifmw_openshift_token }}"
+      {% endif %}
+      {% if cifmw_hosted_cluster_map_infra_storage_class | bool %}
+      cifmw_use_lvms: false
       {% endif %}
   ansible.builtin.copy:
     dest: "{{ cifmw_basedir }}/artifacts/parameters/zz-hosted-cluster-params.yml"

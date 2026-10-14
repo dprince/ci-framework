@@ -123,6 +123,16 @@
             '--additional-network=name:' ~ cifmw_hosted_cluster_hosted_namespace ~ '/\1') |
         list
       }}
+    # Maps the management ("infra") cluster's resolved root-volume
+    # storage class into the guest cluster under the same name -- see
+    # cifmw_hosted_cluster_map_infra_storage_class in defaults/main.yml.
+    _hosted_cluster_infra_storage_class_mapping: >-
+      {{
+        ['--infra-storage-class-mapping=' ~
+         cifmw_hosted_cluster_resolved_root_volume_storage_class ~ '/' ~
+         cifmw_hosted_cluster_resolved_root_volume_storage_class]
+        if cifmw_hosted_cluster_map_infra_storage_class | bool else []
+      }}
   environment:
     KUBECONFIG: "{{ cifmw_openshift_kubeconfig }}"
   ansible.builtin.command:
@@ -144,7 +154,9 @@
           '--pull-secret=' ~ cifmw_hosted_cluster_artifacts_dir ~ '/pull-secret.json',
           '--ssh-key=' ~ cifmw_hosted_cluster_ssh_public_key,
           '--release-image=' ~ cifmw_hosted_cluster_resolved_release_image,
-        ] + _hosted_cluster_additional_networks + ['--render', '--render-sensitive']
+        ] + _hosted_cluster_additional_networks +
+        _hosted_cluster_infra_storage_class_mapping +
+        ['--render', '--render-sensitive']
       }}
   register: _hosted_cluster_rendered
   changed_when: false
