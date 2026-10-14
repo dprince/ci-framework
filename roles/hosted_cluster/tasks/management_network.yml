@@ -139,14 +139,13 @@
   retries: "{{ cifmw_hosted_cluster_wait_retries }}"
   delay: "{{ cifmw_hosted_cluster_wait_delay }}"
 
-# One bridge-type NAD per isolated network, each backed by the matching
-# Linux bridge created above and using whereabouts IPAM -- cifmw_networking_definition
-# already carries a "multus" tool block (IP range) for ctlplane/internalapi/
-# storage/tenant, ci_multus just needs telling to render them as bridge/
-# linux-bridge instead of its macvlan default.
-- name: Create per-network NetworkAttachmentDefinitions for the hosted worker VMs
-  vars:
-    cifmw_ci_multus_namespace: "{{ cifmw_hosted_cluster_hosted_namespace }}"
+# ci_multus discovers cifmw_ci_multus_net_info_patch_* by scanning
+# hostvars[inventory_hostname], which only reflects persisted facts, not
+# task/include_role-scoped `vars:` -- so this must be a real set_fact, not a
+# `vars:` on the include_role task below (the latter silently no-ops: the
+# role's own "when patches exist" check never sees it).
+- name: Patch ci_multus to render bridge/linux-bridge NADs for the isolated networks
+  ansible.builtin.set_fact:
     cifmw_ci_multus_net_info_patch_1: >-
       {%- set _patch = {} -%}
       {%- for _net in cifmw_hosted_cluster_networks -%}
@@ -155,6 +154,14 @@
         }) -%}
       {%- endfor -%}
       {{ _patch }}
+
+# One bridge-type NAD per isolated network, each backed by the matching
+# Linux bridge created above and using whereabouts IPAM -- cifmw_networking_definition
+# already carries a "multus" tool block (IP range) for ctlplane/internalapi/
+# storage/tenant.
+- name: Create per-network NetworkAttachmentDefinitions for the hosted worker VMs
+  vars:
+    cifmw_ci_multus_namespace: "{{ cifmw_hosted_cluster_hosted_namespace }}"
   ansible.builtin.include_role:
     name: ci_multus
 
