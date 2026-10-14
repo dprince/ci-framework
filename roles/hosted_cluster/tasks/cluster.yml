@@ -169,6 +169,34 @@
     mode: "0600"
   no_log: true
 
+- name: Read existing HostedCluster before applying manifests
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
+    api_key: "{{ cifmw_openshift_token | default(omit) }}"
+    context: "{{ cifmw_openshift_context | default(omit) }}"
+    api_version: hypershift.openshift.io/v1beta1
+    kind: HostedCluster
+    namespace: "{{ cifmw_hosted_cluster_namespace }}"
+    name: "{{ cifmw_hosted_cluster_name }}"
+  register: _hosted_cluster_existing
+  no_log: true
+
+- name: Preserve immutable fields from existing HostedCluster
+  when: _hosted_cluster_existing.resources | default([]) | length == 1
+  ansible.builtin.lineinfile:
+    path: "{{ cifmw_hosted_cluster_artifacts_dir }}/hosted-cluster.yaml"
+    regexp: "^([ \\t]*{{ item.field }}:[ \\t]*).*$"
+    line: '\g<1>{{ item.value }}'
+    backrefs: true
+  loop:
+    - field: infraID
+      value: "{{ _hosted_cluster_existing.resources[0].spec.infraID }}"
+    - field: baseDomain
+      value: "{{ _hosted_cluster_existing.resources[0].spec.dns.baseDomain }}"
+  loop_control:
+    label: "{{ item.field }}"
+  no_log: true
+
 - name: Apply KubeVirt hosted cluster manifests
   kubernetes.core.k8s:
     kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
