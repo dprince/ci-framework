@@ -78,11 +78,30 @@ cifmw_hosted_cluster_etcd_storage_class: ""
 # Block devices on the MANAGEMENT cluster's OCP nodes, used only when
 # cifmw_hosted_cluster_etcd_storage_class / _root_volume_storage_class are
 # empty and ci_lvms_storage needs to be installed there. Deliberately
-# separate from the global cifmw_lvms_disk_list, which the generic
-# deploy_architecture.yml flow (cifmw_use_lvms) applies to the HOSTED
-# cluster's own KubeVirt worker nodes once retargeted -- those two node
-# types rarely share the same free block devices.
+# separate from the global cifmw_lvms_disk_list: the HOSTED cluster's own
+# KubeVirt worker nodes have no free block device of their own for the
+# generic deploy_architecture.yml flow (cifmw_use_lvms) to use once
+# retargeted -- see cifmw_hosted_cluster_map_infra_storage_class below,
+# which covers that cluster's storage instead.
 cifmw_hosted_cluster_lvms_disk_list: []
+
+# Maps the management cluster's resolved root-volume storage class into
+# the hosted (guest) cluster under the same name via `hcp create cluster
+# kubevirt --infra-storage-class-mapping=<infra SC>/<guest SC>`, using
+# KubeVirt CSI. hcp create cluster kubevirt only provisions worker VMs
+# with a root volume -- there is no documented way to attach a second
+# disk -- so without this, the generic cifmw_use_lvms step in
+# deploy_architecture.yml would try to install a second, real LVMS stack
+# against the guest cluster's worker nodes and time out (no free block
+# device for its LVMCluster to claim; the root disk and its partitions
+# are excluded). Using the same storage class name on both sides means
+# RHOSO/OpenStack PVCs inside the guest cluster keep working identically
+# to the non-hosted-cluster path, with no changes needed anywhere else.
+# When true, retarget.yml also forces cifmw_use_lvms off for the guest
+# cluster so that doomed install never runs. Set false to restore the old
+# behavior (e.g. if worker VMs are ever given a real secondary disk by
+# some other means).
+cifmw_hosted_cluster_map_infra_storage_class: true
 
 # Empty release_image resolves to the management cluster's own version,
 # mirroring the ClusterVersion-derived default used by `hcp create cluster`.

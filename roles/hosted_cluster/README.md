@@ -103,8 +103,14 @@ is combined with matters:
    configuration happens or is possible, since HyperShift -- not ci-framework
    -- generates the worker VMs' ignition.
 3. Creates the hosted cluster with `hcp create cluster kubevirt`, attaching
-   all four isolated-network NADs via `--additional-network` and the
-   automation SSH key via `--ssh-key`, waits for it to become available,
+   all four isolated-network NADs via `--additional-network`, the
+   automation SSH key via `--ssh-key`, and (when
+   `cifmw_hosted_cluster_map_infra_storage_class` is true, the default)
+   the management cluster's resolved root-volume storage class into the
+   guest cluster under the same name via `--infra-storage-class-mapping`
+   -- `hcp create cluster kubevirt` only provisions worker VMs with a root
+   volume, so this is what gives the guest cluster a working storage class
+   without a second, real LVMS install. Waits for it to become available,
    saves its kubeconfig, and waits for its KubeVirt worker nodes to become
    `Ready`.
 4. Enables global IP forwarding on the hosted cluster's network, the one
@@ -132,7 +138,14 @@ is combined with matters:
    by this role: the existing `deploy_architecture.yml` / `kustomize_deploy`
    flow already does all of that, generically, against whatever cluster
    `cifmw_openshift_kubeconfig` points to -- now including the hosted
-   workers' real interface names resolved in step 5.
+   workers' real interface names resolved in step 5. When
+   `cifmw_hosted_cluster_map_infra_storage_class` is true (the default),
+   this step also forces `cifmw_use_lvms` to `false` (as a cacheable fact
+   and in the persisted `zz-hosted-cluster-params.yml`), since the guest
+   cluster already received a working storage class for free in step 3 --
+   a KubeVirt worker VM has no secondary data disk for a second, real LVMS
+   install to use, and `ci_lvms_storage` would otherwise time out waiting
+   for an unsatisfiable `LVMCluster`.
 
 `roles/cifmw_setup/tasks/deploy_architecture.yml` additionally scales
 `openstack-baremetal` to zero replicas when `cifmw_deploy_hosted_cluster` is
@@ -162,6 +175,7 @@ the OpenStack init CR it generates.
 | `cifmw_hosted_cluster_root_volume_storage_class` | empty | Existing RWO storage class for worker root volumes; empty installs `ci_lvms_storage`. |
 | `cifmw_hosted_cluster_etcd_storage_class` | empty | Existing RWO storage class for hosted etcd; empty installs `ci_lvms_storage`. |
 | `cifmw_hosted_cluster_lvms_disk_list` | `[]` | Block devices on the **management cluster's** OCP nodes for `ci_lvms_storage`, used only when the two storage class variables above are empty. Separate from the global `cifmw_lvms_disk_list`. |
+| `cifmw_hosted_cluster_map_infra_storage_class` | `true` | Maps the management cluster's resolved root-volume storage class into the guest cluster under the same name via `hcp create cluster kubevirt --infra-storage-class-mapping`, and forces `cifmw_use_lvms` off for the guest cluster in `retarget.yml` -- the guest's KubeVirt worker VMs have no secondary data disk for a second, real LVMS install to use. Set `false` to restore the old behavior. |
 | `cifmw_hosted_cluster_release_image` | empty | Hosted cluster release image; empty resolves to the management cluster's own version. |
 | `cifmw_hosted_cluster_cnv_channel` | `stable` | OpenShift Virtualization subscription channel. |
 | `cifmw_hosted_cluster_mce_channel` | `stable-2.17` | MCE subscription channel. No generic "stable" meta-channel exists -- verify this matches your OpenShift release against the MCE Support Matrix on access.redhat.com; `stable-2.17` is current for OpenShift 4.20-4.22. |
