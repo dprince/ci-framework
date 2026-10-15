@@ -313,6 +313,12 @@
 - name: Execute deployment steps
   tags:
     - edpm_deploy
+  # Hosted workers already have isolated interfaces from the management cluster.
+  when: >-
+    not (
+      (cifmw_deploy_hosted_cluster | default(false) | bool) and
+      (stage.name | default('')) == 'nncp-configuration'
+    )
   ansible.builtin.include_role:
     name: kustomize_deploy
     tasks_from: execute_step.yml
