@@ -82,7 +82,11 @@
       {{
         (
           _cifmw_gen_kustomize_values_reject_extra_expressions +
-          cifmw_ci_gen_kustomize_values_remove_keys_expressions
+          cifmw_ci_gen_kustomize_values_remove_keys_expressions +
+          (['^vlan$', '^base_iface$']
+           if (cifmw_deploy_hosted_cluster | default(false) | bool and
+               cifmw_architecture_scenario == 'hci' and
+               _datatype == 'network-values') else [])
         ) | flatten | unique
       }}
   ansible.builtin.set_fact:
@@ -101,6 +105,23 @@
           matching_parameter='regex')
       }}
     cacheable: false
+
+- name: Require hosted workers in the networking environment definition
+  when:
+    - cifmw_deploy_hosted_cluster | default(false) | bool
+    - cifmw_architecture_scenario == 'hci'
+    - values_datatype == 'network-values'
+  vars:
+    _hosted_node_pattern: >-
+      ^{{ cifmw_hosted_cluster_name | default('hcp-0') | regex_escape }}-
+  ansible.builtin.assert:
+    that:
+      - >-
+        cifmw_networking_env_definition.instances.keys() |
+        select('match', _hosted_node_pattern) | list | length > 0
+    fail_msg: >-
+      No hosted worker instances matching {{ _hosted_node_pattern }} were
+      found in cifmw_networking_env_definition.
 
 - name: Ensure we get the needed data depending on the values type
   when:

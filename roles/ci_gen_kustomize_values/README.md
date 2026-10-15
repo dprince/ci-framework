@@ -39,6 +39,12 @@ with a message.
 * `cifmw_ci_gen_kustomize_values_remove_keys_expressions*`: (List) Remove keys matching the regular expressions from source ConfigMaps (values.yaml).
   Defaults to `["^nodes$", "^node(_[0-9]+)?$"]`. Accepts passing additional expressions by passing variables that matches `cifmw_ci_gen_kustomize_values_remove_keys_expressions.+`.
 
+For the `hci` network values template, `cifmw_deploy_hosted_cluster: true`
+selects the hosted worker instances in `cifmw_networking_env_definition`
+using the `cifmw_hosted_cluster_name` prefix (default `hcp-0`). It uses their
+discovered VM interface names for MetalLB and Multus, and omits the management
+cluster's VLAN configuration. Other deployments retain the existing output.
+
 ### Specific parameters for edpm-values
 This configMap needs some more parameters in order to properly override the `architecture` provided one.
 
