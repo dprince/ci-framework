@@ -165,6 +165,28 @@
   ansible.builtin.include_role:
     name: ci_multus
 
+# OVN's host-device CNI takes this interface into the OVS pod, so the guest
+# needs a separate NIC even though it reaches the same provider trunk as
+# ctlplane. No IPAM is needed on that NIC.
+- name: Create datacentre attachment for hosted worker VMs
+  kubernetes.core.k8s:
+    kubeconfig: "{{ cifmw_openshift_kubeconfig }}"
+    api_key: "{{ cifmw_openshift_token | default(omit) }}"
+    context: "{{ cifmw_openshift_context | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: datacentre
+        namespace: "{{ cifmw_hosted_cluster_hosted_namespace }}"
+      spec:
+        config: >-
+          {{
+            {'cniVersion': '0.3.1', 'name': 'datacentre',
+             'type': 'bridge', 'bridge': 'ctlplane', 'ipam': {}} | to_json
+          }}
+
 - name: Create MetalLB IPAddressPool for the hosted cluster KubeAPI
   kubernetes.core.k8s:
     kubeconfig: "{{ cifmw_openshift_kubeconfig }}"

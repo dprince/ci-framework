@@ -71,6 +71,7 @@
       cifmw_openshift_api: "{{ cifmw_openshift_api }}"
       cifmw_openshift_context: "{{ cifmw_openshift_context }}"
       cifmw_openshift_user: "{{ cifmw_openshift_user }}"
+      cifmw_hosted_cluster_datacentre_interface: "{{ cifmw_hosted_cluster_datacentre_interface }}"
       {% if cifmw_openshift_token %}
       cifmw_openshift_token: "{{ cifmw_openshift_token }}"
       {% endif %}

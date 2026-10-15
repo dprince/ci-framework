@@ -101,9 +101,12 @@ is combined with matters:
    with `whereabouts` IPAM. KubeVirt assigns and configures each worker VM's
    interface automatically at boot from these NADs; no in-guest nmstate/VLAN
    configuration happens or is possible, since HyperShift -- not ci-framework
-   -- generates the worker VMs' ignition.
+   -- generates the worker VMs' ignition. A separate `datacentre` NAD on the
+   ctlplane-backed provider trunk gives each VM a dedicated, unnumbered NIC
+   for the OVN gateway pod.
 3. Creates the hosted cluster with `hcp create cluster kubevirt`, attaching
-   all four isolated-network NADs via `--additional-network`, the
+   the four isolated-network NADs and the datacentre NAD via
+   `--additional-network`, the
    automation SSH key via `--ssh-key`, and (when
    `cifmw_hosted_cluster_map_infra_storage_class` is true, the default)
    the management cluster's resolved root-volume storage class into the
@@ -128,7 +131,9 @@ is combined with matters:
    group-templates, with its own non-overlapping IP range so it can never
    collide with the management cluster's own node addressing). The result is
    merged into the same global `cifmw_networking_env_definition` used
-   everywhere else, so no separate, hosted-specific networking fact exists.
+   everywhere else. The unnumbered datacentre NIC is discovered separately
+   and persisted as `cifmw_hosted_cluster_datacentre_interface` for the
+   generated guest NAD and OVN NIC mapping.
 6. Retargets `cifmw_openshift_kubeconfig` at the hosted cluster, mirroring
    the override pattern used by the `hive` role, so every later
    `cifmw_setup` phase (`deploy_architecture.yml`, `deploy_edpm.yml`)
@@ -160,7 +165,7 @@ the OpenStack init CR it generates.
 | `cifmw_hosted_cluster_name` | `hcp-0` | HostedCluster name. |
 | `cifmw_hosted_cluster_namespace` | `clusters` | HostedCluster and kubeconfig namespace. |
 | `cifmw_hosted_cluster_hosted_namespace` | `clusters-<name>` | Control plane namespace HyperShift manages; where service-pod NADs are attached. |
-| `cifmw_hosted_cluster_networks` | `[ctlplane, internalapi, storage, tenant]` | Isolated networks attached to the hosted cluster. |
+| `cifmw_hosted_cluster_networks` | `[ctlplane, internalapi, storage, tenant]` | Numbered isolated networks attached to the hosted cluster. A separate unnumbered datacentre NIC is always attached for the OVN gateway. |
 | `cifmw_hosted_cluster_management_interface` | `""` | **Required.** Physical NIC on the management cluster nodes bridged (via `NodeNetworkConfigurationPolicy`) into one Linux bridge per isolated network -- untagged for ctlplane, VLAN-tagged for internalapi/storage/tenant. No `cifmw_networking_env_definition.instances`-based discovery, since a dev-scripts-installed management cluster has no matching entry. |
 | `cifmw_hosted_cluster_management_node_selector` | `{node-role.kubernetes.io/master: ""}` | Node selector for the isolated-networks `NodeNetworkConfigurationPolicy`. |
 | `cifmw_hosted_cluster_nmstate_channel` | `stable` | NMState Operator subscription channel. |

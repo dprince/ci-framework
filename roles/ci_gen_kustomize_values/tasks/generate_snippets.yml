@@ -119,9 +119,10 @@
       - >-
         cifmw_networking_env_definition.instances.keys() |
         select('match', _hosted_node_pattern) | list | length > 0
+      - cifmw_hosted_cluster_datacentre_interface | default('') | length > 0
     fail_msg: >-
-      No hosted worker instances matching {{ _hosted_node_pattern }} were
-      found in cifmw_networking_env_definition.
+      Hosted deployments require worker instances matching
+      {{ _hosted_node_pattern }} and a discovered datacentre interface.
 
 - name: Ensure we get the needed data depending on the values type
   when:

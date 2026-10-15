@@ -43,7 +43,10 @@ For the `hci` network values template, `cifmw_deploy_hosted_cluster: true`
 selects the hosted worker instances in `cifmw_networking_env_definition`
 using the `cifmw_hosted_cluster_name` prefix (default `hcp-0`). It uses their
 discovered VM interface names for MetalLB and Multus, and omits the management
-cluster's VLAN configuration. Other deployments retain the existing output.
+cluster's VLAN configuration. It also replaces the architecture's physical
+`datacentre` device with `cifmw_hosted_cluster_datacentre_interface`, discovered
+from the hosted worker VMs, for both the guest NAD and OVN NIC mapping. Other
+deployments retain the existing output.
 
 ### Specific parameters for edpm-values
 This configMap needs some more parameters in order to properly override the `architecture` provided one.

@@ -193,3 +193,36 @@
           {{ ansible_user_dir }}/bin/kustomize build >
           {{ artifacts }}/{{ item.name }}.yaml
       loop: "{{ to_kustomize }}"
+
+    - name: Render hosted HCI network values with the discovered OVN NIC
+      vars:
+        cifmw_deploy_hosted_cluster: true
+        cifmw_hosted_cluster_datacentre_interface: enp9s0
+        cifmw_networking_env_definition: >-
+          {{
+            ocp_cluster_networking_env_definition |
+            combine({
+              'instances': {
+                'hcp-0-test': ocp_cluster_networking_env_definition.instances['ocp-master-0'] |
+                  combine({'hostname': 'hcp-0-test'})
+              }
+            }, recursive=true)
+          }}
+        cifmw_ci_gen_kustomize_values_name: network-values
+        cifmw_ci_gen_kustomize_values_src_file: >-
+          {{
+            [architecture_repo,
+             'examples/va/hci/control-plane/networking/nncp/values.yaml'] | path_join
+          }}
+      ansible.builtin.include_role:
+        name: ci_gen_kustomize_values
+
+    - name: Verify hosted OVN device and NAD use the guest interface
+      vars:
+        _val_file: "{{ artifacts }}/ci_gen_kustomize_values/network-values/values.yaml"
+        _network_val: "{{ lookup('file', _val_file) | from_yaml }}"
+      ansible.builtin.assert:
+        that:
+          - _network_val.data.datacentre.iface == 'enp9s0'
+          - (_network_val.data.datacentre['net-attach-def'] | from_json).device == 'enp9s0'
+          - _network_val.data.node_0.name == 'hcp-0-test'

@@ -17,7 +17,7 @@
 # [1] https://ansible.readthedocs.io/projects/molecule/configuration/#provisioner-pre-ansible-native
 log: true
 
-#platforms:
+# platforms:
 #  - name: instance
 #    groups:
 #      - molecule

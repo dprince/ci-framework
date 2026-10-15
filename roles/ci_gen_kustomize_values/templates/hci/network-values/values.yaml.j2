@@ -97,6 +97,19 @@ data:
 {%  endif %}
 {% endfor %}
 
+{% if hosted_cluster %}
+  datacentre:
+    iface: {{ cifmw_hosted_cluster_datacentre_interface }}
+    net-attach-def: |
+      {
+        "cniVersion": "0.3.1",
+        "name": "datacentre",
+        "type": "host-device",
+        "device": "{{ cifmw_hosted_cluster_datacentre_interface }}",
+        "ipam": {}
+      }
+{% endif %}
+
   dns-resolver:
     config:
       server:
