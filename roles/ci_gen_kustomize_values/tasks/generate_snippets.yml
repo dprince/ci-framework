@@ -82,11 +82,7 @@
       {{
         (
           _cifmw_gen_kustomize_values_reject_extra_expressions +
-          cifmw_ci_gen_kustomize_values_remove_keys_expressions +
-          (['^vlan$', '^base_iface$']
-           if (cifmw_deploy_hosted_cluster | default(false) | bool and
-               cifmw_architecture_scenario == 'hci' and
-               _datatype == 'network-values') else [])
+          cifmw_ci_gen_kustomize_values_remove_keys_expressions
         ) | flatten | unique
       }}
   ansible.builtin.set_fact:
@@ -105,6 +101,33 @@
           matching_parameter='regex')
       }}
     cacheable: false
+
+# Hosted workers use dedicated guest NICs, but the subnet VLANs must remain
+# in NetConfig for EDPM computes. Remove only the network-level NNCP fields.
+- name: Remove hosted worker VLAN interface settings
+  when:
+    - cifmw_deploy_hosted_cluster | default(false) | bool
+    - cifmw_architecture_scenario == 'hci'
+    - values_datatype == 'network-values'
+  vars:
+    _network_data: >-
+      {%- set _data = {} -%}
+      {%- for _name, _value in _cifmw_gen_kustomize_values_base_cm_content.data.items() -%}
+        {%- set _fields = (
+          _value | dict2items |
+          rejectattr('key', 'in', ['vlan', 'base_iface']) | items2dict
+          if _name in cifmw_networking_env_definition.networks and _value is mapping
+          else _value
+        ) -%}
+        {%- set _ = _data.update({_name: _fields}) -%}
+      {%- endfor -%}
+      {{ _data }}
+  ansible.builtin.set_fact:
+    _cifmw_gen_kustomize_values_base_cm_content: >-
+      {{
+        _cifmw_gen_kustomize_values_base_cm_content |
+        combine({'data': _network_data})
+      }}
 
 - name: Require hosted workers in the networking environment definition
   when:

@@ -46,7 +46,7 @@ data:
         gateway: {{ network[_ipv.gw_vX] }}
 {%    endif %}
         name: subnet1
-{%    if network.vlan_id is defined and not hosted_cluster %}
+{%    if network.vlan_id is defined %}
         vlan: {{ network.vlan_id }}
 {%    endif %}
 {%    if ns.lb_tools | length > 0 %}
